@@ -20,7 +20,7 @@ else:
         IS_HIP = True
 
 if not IS_HIP:
-    cc_flag = ["--use_fast_math"]
+    cc_flag = ["--use_fast_math", "-allow-unsupported-compiler"]
 else:
     archs = os.getenv("GPU_ARCHS", "native").split(";")
     cc_flag = [f"--offload-arch={arch}" for arch in archs]
@@ -62,7 +62,9 @@ setup(
                 # Grid sample functions
                 "flex_gemm/kernels/cuda/grid_sample/grid_sample.cu",
                 # Convolution functions
-                "flex_gemm/kernels/cuda/spconv/neighbor_map.cu",
+                "flex_gemm/kernels/cuda/spconv/subm_neighbor_map.cu",
+                "flex_gemm/kernels/cuda/spconv/sparse_neighbor_map.cu",
+                "flex_gemm/kernels/cuda/spconv/migemm_neighmap_pp.cu",
                 # main
                 "flex_gemm/kernels/cuda/ext.cpp",
             ],
@@ -77,10 +79,36 @@ setup(
     ]
 )
 
-# copy cache to tmp dir
+# Install autotune cache. If an existing cache is present, merge entries
+# from the package's cache on top of it (package values override existing).
+import json
+
+def _deep_merge(base, override):
+    """Recursively merge ``override`` into ``base``; ``override`` wins on leaves."""
+    if isinstance(base, dict) and isinstance(override, dict):
+        merged = dict(base)
+        for k, v in override.items():
+            merged[k] = _deep_merge(base.get(k), v) if k in base else v
+        return merged
+    return override
+
 os.makedirs(os.path.expanduser("~/.flex_gemm"), exist_ok=True)
-shutil.copyfile(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "autotune_cache.json"),
-    os.path.expanduser('~/.flex_gemm/autotune_cache.json'),
-)
+src_cache_path = os.path.join(ROOT, "autotune_cache.json")
+dst_cache_path = os.path.expanduser("~/.flex_gemm/autotune_cache.json")
+
+with open(src_cache_path, "r") as f:
+    src_cache = json.load(f)
+
+if os.path.exists(dst_cache_path):
+    try:
+        with open(dst_cache_path, "r") as f:
+            dst_cache = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        dst_cache = {}
+    merged_cache = _deep_merge(dst_cache, src_cache)
+else:
+    merged_cache = src_cache
+
+with open(dst_cache_path, "w") as f:
+    json.dump(merged_cache, f, indent=4)
 
